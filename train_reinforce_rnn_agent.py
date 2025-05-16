@@ -35,7 +35,17 @@ class reinforce_optimizer(BaseOptimizer):
         self.agent_name = cfg.agent_name
 
     def _init(self, cfg):
-        if cfg.dataset == 'zinc250k':
+        if cfg.dataset == 'molgen_oled_1':
+            saved_path = 'saved/' + cfg.dataset + '/' + cfg.model_name + '_' + cfg.rep + '/' + 'chembl0.25_zinc0.25_moses0.25_oled0.25.pt'
+            vocab_path = 'data/molgen_oled_1/molgen_' + cfg.rep + '_vocab.txt'
+            if cfg.rep=='smiles': 
+                max_dataset_len = 406 # 112
+            elif cfg.rep=='selfies':
+                max_dataset_len = 106
+            if cfg.max_len > max_dataset_len:
+                cfg.max_len = max_dataset_len
+                print('*** Changing the maximum length of sampled molecules because it was set to be greater than the maximum length seen during training ***')
+        elif cfg.dataset == 'zinc250k':
             saved_path = 'saved/' + cfg.dataset + '/' + cfg.model_name + '_' + cfg.rep + '/' + cfg.saved_name
             vocab_path = 'data/zinc250k/zinc_' + cfg.rep + '_vocab.txt'
             max_dataset_len = 73
@@ -160,12 +170,12 @@ def main(cfg: DictConfig):
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
     
     if cfg.wandb_log:
-        project_name = cfg.task + '_' + cfg.target
+        # project_name = cfg.task + '_' + cfg.target
         if cfg.wandb_dir is not None:
             cfg.wandb_dir = path_here 
         else:
             cfg.wandb_dir = hydra_cfg['runtime']['output_dir']
-        wandb.init(project=project_name, entity=cfg.wandb_entity, config=dict(cfg), dir=cfg.wandb_dir)
+        wandb.init(project="llms-materials-rl", entity=cfg.wandb_entity, config=dict(cfg), dir=cfg.wandb_dir)
         wandb.run.name = cfg.wandb_run_name
     
     set_seed(cfg.seed)
@@ -176,5 +186,6 @@ def main(cfg: DictConfig):
     sys.exit(0)
 
 if __name__ == '__main__':
+    wandb.init(project="llms-materials-rl")
     main()
     exit()

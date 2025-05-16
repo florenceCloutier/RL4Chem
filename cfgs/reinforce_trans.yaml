@@ -3,7 +3,16 @@ model_name: char_trans
 dataset: zinc250k
 rep: smiles
 task: pmo
-target: qed
+rdkit_targets:
+  - qed
+  - LogP
+homo_lumo: False
+weights:
+  - 0.5
+  - 0.5
+target_values:
+  - 1
+  - 0 
 
 #docking specific
 vina_program: 'qvina2'
@@ -16,14 +25,15 @@ timeout_gen3d: 30
 timeout_dock: 100
 
 #learning
-seed: 1
+seed: 3
 device: cuda
-max_oracle_calls: 25000
-max_strings: 40000
+max_oracle_calls: 500000
+max_strings: 1000000
 
 learning_rate: 0.0001
-batch_size: 64
-max_len: 100
+lr_anneal_step: 100
+batch_size: 512
+max_len: 150
 dropout: 0.0
 
 #loss
@@ -34,6 +44,7 @@ n_layers: 6
 n_embed: 256
 n_heads: 16
 saved_name: final_1.pt
+gen_type: construct # generate or construct
 
 #logging
 wandb_log: False
@@ -41,7 +52,7 @@ wandb_entity: raj19
 wandb_dir:
 wandb_run_name: ${agent_name}_${seed}
 train_log_interval: 4
-env_log_interval: 100
+env_log_interval: 500
 
 #saving
 save_snapshot: False

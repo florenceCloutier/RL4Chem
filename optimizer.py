@@ -7,6 +7,7 @@ import numpy as np
 from tdc import Oracle
 from rdkit import Chem
 from rdkit.Chem import Draw
+from helpers.mopac import smiles_to_mopac_input, run_mopac, extract_homo_lumo_gap
 
 def top_auc(buffer, top_n, finish, env_log_interval, max_oracle_calls):
     sum = 0
@@ -31,7 +32,8 @@ class BaseOptimizer:
     def __init__(self, cfg=None):
         self.cfg = cfg
         self.model_name = cfg.model_name
-        self.target_name = cfg.target
+        self.rdkit_target_names = cfg.rdkit_targets
+        self.weights = cfg.weights
         
         # defining target oracles
         self.assign_target(cfg)
@@ -71,19 +73,19 @@ class BaseOptimizer:
         if cfg.task == 'docking':
             from docking import DockingVina
             docking_config = dict()
-            if self.target_name == 'fa7':
+            if self.rdkit_target_names == 'fa7':
                 box_center = (10.131, 41.879, 32.097)
                 box_size = (20.673, 20.198, 21.362)
-            elif self.target_name == 'parp1':
+            elif self.rdkit_target_names == 'parp1':
                 box_center = (26.413, 11.282, 27.238)
                 box_size = (18.521, 17.479, 19.995)
-            elif self.target_name == '5ht1b':
+            elif self.rdkit_target_names == '5ht1b':
                 box_center = (-26.602, 5.277, 17.898)
                 box_size = (22.5, 22.5, 22.5)
-            elif self.target_name == 'jak2':
+            elif self.rdkit_target_names == 'jak2':
                 box_center = (114.758,65.496,11.345)
                 box_size= (19.033,17.929,20.283)
-            elif self.target_name == 'braf':
+            elif self.rdkit_target_names == 'braf':
                 box_center = (84.194,6.949,-7.081)
                 box_size = (22.032,19.211,14.106)
             else:
@@ -107,19 +109,19 @@ class BaseOptimizer:
         elif cfg.task == 'augmented_docking':
             from docking import DockingVina
             docking_config = dict()
-            if self.target_name == 'fa7':
+            if self.rdkit_target_names == 'fa7':
                 box_center = (10.131, 41.879, 32.097)
                 box_size = (20.673, 20.198, 21.362)
-            elif self.target_name == 'parp1':
+            elif self.rdkit_target_names == 'parp1':
                 box_center = (26.413, 11.282, 27.238)
                 box_size = (18.521, 17.479, 19.995)
-            elif self.target_name == '5ht1b':
+            elif self.rdkit_target_names == '5ht1b':
                 box_center = (-26.602, 5.277, 17.898)
                 box_size = (22.5, 22.5, 22.5)
-            elif self.target_name == 'jak2':
+            elif self.rdkit_target_names == 'jak2':
                 box_center = (114.758,65.496,11.345)
                 box_size= (19.033,17.929,20.283)
-            elif self.target_name == 'braf':
+            elif self.rdkit_target_names == 'braf':
                 box_center = (84.194,6.949,-7.081)
                 box_size = (22.032,19.211,14.106)
             else:
@@ -142,7 +144,7 @@ class BaseOptimizer:
             self.predict = self.predict_augmented_docking
 
         elif cfg.task == 'pmo':
-            self.target = Oracle(name = self.target_name)
+            self.targets = [Oracle(name = target_name) for target_name in self.rdkit_target_names]
             self.predict = self.predict_pmo
         else:
             raise NotImplementedError
@@ -161,39 +163,94 @@ class BaseOptimizer:
         wandb.define_metric("n_oracle", step_metric="num_molecules")
         wandb.define_metric("invalid_count", step_metric="num_molecules")
         wandb.define_metric("redundant_count", step_metric="num_molecules")
+        
+    def homo_lumo_gap(self, smiles):
+        input_file = 'homo_lumo.mop'
+        smiles_to_mopac_input(smiles, input_file)
+        output_file = run_mopac(input_file)
+        homo_lumo_gap = extract_homo_lumo_gap(output_file)
+        return homo_lumo_gap
 
-    def score_pmo(self, smi):
+    def _normalize_logp(self, logp):
+        """Normalize LogP to [0,1] range using a sigmoid function."""
+        # Center around 2.5 (drug-like region) with slope factor of 0.5
+        return 1 / (1 + np.exp(-0.5 * (logp - 2.5)))
+    
+    def _denormalize_logp(self, logp):
+        """Inverse function to retrieve logP from its normalized value."""
+        if logp == 0:
+            return logp
+        return 2.5 - 2 * np.log((1 / logp) - 1)
+    
+    def score_pmo(self, smi, targets, homo_lumo=False, last_eval=False):
         """
         Function to score one molecule
-        Argguments:
-            smi: One SMILES string represnets a moelcule.
+        Arguments:
+            smi: One SMILES string represnets a molecule.
         Return:
             score: a float represents the property of the molecule.
         """
-        if len(self.mol_buffer) > self.max_oracle_calls:
-            return 0
+        qed_score = 0
+        logp_score = 0
+        if len(self.mol_buffer) > self.max_oracle_calls and not last_eval:
+            return 0, 0, 0, None
         if smi is None:
-            return 0
+            return 0, 0, 0, None
         mol = Chem.MolFromSmiles(smi)
         if mol is None or len(smi) == 0:
             self.invalid_count += 1
-            return 0.0
+            return 0.0, 0.0, 0.0, None
         else:
             smi = Chem.MolToSmiles(mol)
             if smi in self.mol_buffer:
                 self.mol_buffer[smi][2] += 1
                 self.redundant_count += 1
-            else:
-                self.mol_buffer[smi] = [float(self.target(smi)), len(self.mol_buffer)+1, 1]
-            return self.mol_buffer[smi][0]
+            # else:
+            scores = []
+            for target in self.targets:
+                if target.name == 'logp':
+                    logp_score = self._normalize_logp(target(smi))
+                    targets[1] = self._normalize_logp(targets[1])
+                    scores.append(logp_score)
+                if target.name == 'qed':
+                    qed_score = target(smi)
+                    scores.append(qed_score)
+            if homo_lumo:
+                homo_lumo_gap = self.homo_lumo_gap(smi)
+                scores.append(homo_lumo_gap)
+            else: homo_lumo_gap = None
+    
+            # Combine scores with weighted geometric mean
+            # TODO!!! Here have to normalize logp targets I think!
+            new_scores = self.compute_reward_pmo(scores, targets)
+            if np.any(new_scores == 0):
+                return 0.0, 0.0, 0.0, None
+            score_qed_only = float(np.sum(self.weights * new_scores))
+            # weighted_geometric_mean = float(np.exp(np.sum(self.weights * np.log(new_scores))))
+            
+            # self.mol_buffer[smi] = [weighted_geometric_mean, len(self.mol_buffer)+1, 1]
+            self.mol_buffer[smi] = [score_qed_only, len(self.mol_buffer)+1, 1]
+            return self.mol_buffer[smi][0], qed_score, logp_score, homo_lumo_gap
+    
+    def compute_reward_pmo(self, scores, targets):
+        diff = np.array(targets) - np.array(scores)
+        reward = np.exp(-5 * np.abs(diff)) # reward = np.exp(-(diff**2) * 3)
+        return reward
         
-    def predict_pmo(self, smiles_list):
+    def predict_pmo(self, smiles_list, targets, homo_lumo=False, last_eval=False):
         st = time.time()
         assert type(smiles_list) == list
         self.total_count += len(smiles_list)
         score_list = []
-        for smi in smiles_list:
-            score_list.append(self.score_pmo(smi))
+        score_qed_list = []
+        score_logp_list = []
+        score_homo_lumo = []
+        for idx, smi in enumerate(smiles_list):
+            score, score_qed, score_logp, homo_lumo_gap = self.score_pmo(smi, targets[idx], homo_lumo, last_eval=last_eval)
+            score_list.append(score)
+            score_qed_list.append(score_qed)
+            score_logp_list.append(score_logp)
+            score_homo_lumo.append(homo_lumo_gap)
             if len(self.mol_buffer) % self.env_log_interval == 0 and len(self.mol_buffer) > self.last_log:
                 self.sort_buffer()
                 self.log_intermediate()
@@ -202,7 +259,7 @@ class BaseOptimizer:
         
         self.last_logging_time = time.time() - st
         self.mean_score = np.mean(score_list)
-        return score_list
+        return score_list, score_qed_list, score_logp_list, score_homo_lumo
 
     def predict_augmented_docking(self, smiles_list):
         """
@@ -354,7 +411,7 @@ class BaseOptimizer:
                 # f'avg_top10: {avg_top10:.3f} | '
                 # f'avg_top100: {avg_top100:.3f} | '
                 f'time: {time.time() - self.last_log_time:.3f} | '
-                f'logging time : {self.last_logging_time} | '
+                # f'logging time : {self.last_logging_time} | '
                 f'mean_score: {self.mean_score:.3f} | '
                 f'tot_cnt: {self.total_count} | '
                 f'inv_count: {self.invalid_count} | '

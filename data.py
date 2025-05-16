@@ -109,19 +109,19 @@ class smiles_vocabulary(object):
         for char in chars:
             self.alphabet.add(char)
         
-        self.special_tokens = ['EOS', 'BOS', 'PAD', 'UNK']
-
+        self.special_tokens = ['EOS', 'BOS', 'PAD', 'UNK'] #
+        
         self.alphabet_list = list(self.alphabet)
         self.alphabet_list.sort()
-        self.alphabet_list = self.alphabet_list + self.special_tokens
+        self.alphabet_list = self.alphabet_list + self.special_tokens + ['LOGP', '\\LOGP', 'QED', '\\QED', 'B', '[B-]', '/', '[C@@]', '[C@@H]', '[C@H]', "\\", '[P@@]', '[C@]', '[NH3+]', 'I', '[H]', '[S@]', '[S@@]', '[P@]', '[P@@H]', 'P', '[OH+]', '[PH]', '[CH2-]', '[S@@+]']
+
         self.alphabet_length = len(self.alphabet_list)
 
         self.alphabet_to_idx = {s: i for i, s in enumerate(self.alphabet_list)}
         self.idx_to_alphabet = {s: i for i, s in self.alphabet_to_idx.items()}
-
-        self.special_tokens_idx = [self.eos, self.bos, self.pad, self.unk]
+        self.special_tokens_idx = [self.eos, self.pad, self.unk] #self.bos, 
         
-    def tokenize(self, smiles, add_bos=False, add_eos=False):
+    def tokenize(self, smiles, add_bos=False, add_eos=False, add_logp=False, add_qed=False, add_homo_lumo=False):
         """Takes a SMILES and return a list of characters/tokens"""
         regex = '(\[[^\[\]]{1,6}\])'
         smiles = replace_halogen(smiles)
@@ -141,7 +141,9 @@ class smiles_vocabulary(object):
     
     def encode(self, smiles, add_bos=False, add_eos=False):
         """Takes a list of SMILES and encodes to array of indices"""
-        char_list = self.tokenize(smiles, add_bos, add_eos)
+        if isinstance(smiles, str): 
+            char_list = self.tokenize(smiles, add_bos, add_eos)
+        else: char_list = smiles
         encoded_smiles = np.zeros(len(char_list), dtype=np.uint8)
         for i, char in enumerate(char_list):
             encoded_smiles[i] = self.alphabet_to_idx[char]
@@ -161,7 +163,7 @@ class smiles_vocabulary(object):
         smiles = smiles.replace("L", "Cl").replace("R", "Br")
         return smiles
 
-    def decode_padded(self, encoded_smiles, rem_bos=True):
+    def decode_padded(self, encoded_smiles, rem_bos=False):
         """Takes a padded array of indices and returns the corresponding SMILES"""
         if rem_bos and encoded_smiles[0] == self.bos:
             encoded_smiles = encoded_smiles[1:]
@@ -186,6 +188,30 @@ class smiles_vocabulary(object):
     @property
     def eos(self):
         return self.alphabet_to_idx['EOS']
+    
+    @property
+    def b(self):
+        return self.alphabet_to_idx['B']
+    
+    @property
+    def b_minus(self):
+        return self.alphabet_to_idx['[B-]']
+    
+    @property
+    def logp(self):
+        return self.alphabet_to_idx['LOGP']
+    
+    @property
+    def end_logp(self):
+        return self.alphabet_to_idx['\LOGP']
+    
+    @property
+    def qed(self):
+        return self.alphabet_to_idx['QED']
+    
+    @property
+    def end_qed(self):
+        return self.alphabet_to_idx['\QED']
     
     @property
     def pad(self):

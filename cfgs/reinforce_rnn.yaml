@@ -3,7 +3,16 @@ model_name: char_rnn
 dataset: zinc250k
 rep: smiles
 task: pmo
-target: qed
+rdkit_targets:
+  - qed
+  - LogP
+homo_lumo: True
+weights:
+  - 0.5
+  - 0.5
+target_values:
+  - 1
+  - 0 
 
 #docking specific
 vina_program: 'qvina2'
